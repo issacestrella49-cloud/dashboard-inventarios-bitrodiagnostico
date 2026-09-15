@@ -1,0 +1,9 @@
+venv/
+__pycache__/
+*.pyc
+*.log
+EVIDENCIAS/
+ENTREGABLES/
+node_modules/
+.claude/
+page_dump.html
