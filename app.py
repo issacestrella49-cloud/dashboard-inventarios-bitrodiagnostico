@@ -1,4 +1,4 @@
-import io, math, re, unicodedata, os, json
+import io, math, re, unicodedata, os
 from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
@@ -9,6 +9,7 @@ from scipy.stats import norm
 from statsmodels.tsa.holtwinters import ExponentialSmoothing
 from sklearn.ensemble import RandomForestRegressor
 from xgboost import XGBRegressor
+from sqlalchemy import text
 
 st.set_page_config(page_title='Inventario Inteligente | Bitrodiagnóstico',page_icon='📦',layout='wide')
 
@@ -41,10 +42,6 @@ FORECAST_DEMO=pd.DataFrame(FD,columns=['Codigo','Fecha','Modelo','Pronostico'])
 CLASIF={'BR 001029':('A','F'),'BR 001235':('A','F'),'BR 001255':('A','F'),'BR 002124':('A','N'),'BR 002125':('A','F'),'BR 004014':('A','N'),'BR 004015':('A','F'),'BR 004015-1':('A','S'),'BR 004310':('A','F'),'BR 004851':('A','F'),'BR 009280':('A','F'),'DM BT248DOPE':('A','F')}
 FSN_LABEL={'F':'Rápido (Fast)','S':'Lento (Slow)','N':'Sin movimiento (Non-moving)'}
 
-DATA_DIR='data_base'
-os.makedirs(DATA_DIR, exist_ok=True)
-META_PATH=os.path.join(DATA_DIR,'meta.json')
-
 def clean(x):
  x=''.join(c for c in unicodedata.normalize('NFD',str(x).lower()) if unicodedata.category(c)!='Mn')
  return re.sub(r'[^a-z0-9]+','_',x).strip('_')
@@ -58,9 +55,6 @@ def col(df,names):
  return None
 def sheets(src):
  if src is None:return {}
- if isinstance(src,str):
-  if not os.path.exists(src):return {}
-  x=pd.ExcelFile(src);return {s:pd.read_excel(src,sheet_name=s) for s in x.sheet_names}
  b=src.getvalue(); x=pd.ExcelFile(io.BytesIO(b)); return {s:pd.read_excel(io.BytesIO(b),sheet_name=s) for s in x.sheet_names}
 def best(sh,groups):
  ans=None;bs=-1
@@ -176,17 +170,66 @@ def generar_pronostico_ml(hist,metricas,horizon=12):
   for f,v in zip(fechas,vals):filas.append([cod,f,modelo,float(v)])
  return pd.DataFrame(filas,columns=['Codigo','Fecha','Modelo','Pronostico']) if filas else None
 
-def hay_base_guardada():
- return all(os.path.exists(os.path.join(DATA_DIR,n)) for n in ('historico.xlsx','parametros.xlsx'))
-def guardar_base(uh,up):
- with open(os.path.join(DATA_DIR,'historico.xlsx'),'wb') as f:f.write(uh.getvalue())
- with open(os.path.join(DATA_DIR,'parametros.xlsx'),'wb') as f:f.write(up.getvalue())
- with open(META_PATH,'w') as f:json.dump({'actualizado':datetime.now().strftime('%d/%m/%Y %H:%M')},f)
-def cargar_meta():
- if os.path.exists(META_PATH):
-  try:return json.load(open(META_PATH))
-  except Exception:return {}
- return {}
+# --- Persistencia en base de datos (evita perder datos entre sesiones/reinicios del servidor) ---
+PARAM_COLS={'Codigo':'codigo','Costo_Unitario':'costo_unitario','Tasa_Mantenimiento':'tasa_mantenimiento','H':'h','Lead_Time_Dias':'lead_time_dias','Inventario_Fisico':'inventario_fisico','MOQ':'moq','Pedidos_Transito':'pedidos_transito','Pedidos_Pendientes':'pedidos_pendientes','Costo_Orden':'costo_orden'}
+PARAM_COLS_INV={v:k for k,v in PARAM_COLS.items()}
+
+@st.cache_resource
+def get_conn():
+ try:return st.connection('db',type='sql')
+ except Exception:return None
+
+def crear_tablas(conn):
+ with conn.session as s:
+  s.execute(text('CREATE TABLE IF NOT EXISTS historico (codigo TEXT, fecha DATE, demanda REAL)'))
+  cols_sql=', '.join(f'{c} REAL' for c in PARAM_COLS.values() if c!='codigo')
+  s.execute(text(f'CREATE TABLE IF NOT EXISTS parametros (codigo TEXT PRIMARY KEY, {cols_sql})'))
+  s.execute(text('CREATE TABLE IF NOT EXISTS meta (clave TEXT PRIMARY KEY, valor TEXT)'))
+  s.commit()
+
+def hay_base_guardada(conn):
+ try:return int(conn.query('SELECT COUNT(*) AS n FROM historico',ttl=0)['n'].iloc[0])>0
+ except Exception:return False
+
+def guardar_historico(conn,hist_df):
+ df=hist_df.rename(columns={'Codigo':'codigo','Fecha':'fecha','Demanda':'demanda'})[['codigo','fecha','demanda']]
+ with conn.session as s:
+  s.execute(text('DELETE FROM historico'));s.commit()
+ df.to_sql('historico',conn.engine,if_exists='append',index=False)
+
+def guardar_parametros(conn,par_df):
+ df=par_df.rename(columns=PARAM_COLS)
+ df=df[[c for c in PARAM_COLS.values() if c in df.columns]]
+ with conn.session as s:
+  s.execute(text('DELETE FROM parametros'));s.commit()
+ df.to_sql('parametros',conn.engine,if_exists='append',index=False)
+
+def guardar_meta(conn):
+ v=datetime.now().strftime('%d/%m/%Y %H:%M')
+ with conn.session as s:
+  s.execute(text("INSERT INTO meta (clave,valor) VALUES ('actualizado',:v) ON CONFLICT (clave) DO UPDATE SET valor=:v"),{'v':v})
+  s.commit()
+
+def leer_historico(conn):
+ try:
+  df=conn.query('SELECT codigo AS "Codigo", fecha AS "Fecha", demanda AS "Demanda" FROM historico',ttl=0)
+  if not len(df):return None
+  df['Fecha']=pd.to_datetime(df['Fecha']);return df
+ except Exception:return None
+
+def leer_parametros(conn):
+ try:
+  df=conn.query('SELECT * FROM parametros',ttl=0)
+  if not len(df):return None
+  return df.rename(columns=PARAM_COLS_INV)
+ except Exception:return None
+
+def cargar_meta(conn):
+ try:
+  df=conn.query("SELECT valor FROM meta WHERE clave='actualizado'",ttl=0)
+  return {'actualizado':df['valor'].iloc[0]} if len(df) else {}
+ except Exception:return {}
+
 def merge_inventario(params,inv_nuevo):
  if params is None:return inv_nuevo
  p=params.merge(inv_nuevo,on='Codigo',how='outer',suffixes=('','_inv'))
@@ -200,44 +243,53 @@ st.sidebar.header('Configuración')
 modo=st.sidebar.radio('Modo',['Resultados congelados de la tesis','Cargar archivos actualizados'])
 hist=None;forecast=FORECAST_DEMO.copy();params=None
 if modo.startswith('Cargar'):
- st.sidebar.subheader('1) Datos base (una sola vez)')
- base_lista=hay_base_guardada()
- if base_lista:
-  meta=cargar_meta()
-  st.sidebar.success(f"Datos base guardados (subidos: {meta.get('actualizado','—')})")
-  reemplazar=st.sidebar.checkbox('Subir/reemplazar datos base')
+ conn=get_conn()
+ if conn is None:
+  st.sidebar.error('No se pudo conectar a la base de datos. Falta configurar la conexión "db" en Secrets (Streamlit Cloud → Settings → Secrets, o .streamlit/secrets.toml en local).')
  else:
-  st.sidebar.info('Primera vez: sube histórico y parámetros de costo/lead time. El pronóstico de las próximas semanas se genera automáticamente con Machine Learning a partir del histórico.')
-  reemplazar=True
- if reemplazar:
-  uh=st.sidebar.file_uploader('Histórico semanal (.xlsx)',type='xlsx',key='uh')
-  up=st.sidebar.file_uploader('Parámetros de costo/lead time (.xlsx)',type='xlsx',key='up')
-  if uh and up:
+  crear_tablas(conn)
+  st.sidebar.subheader('1) Datos base (una sola vez)')
+  base_lista=hay_base_guardada(conn)
+  if base_lista:
+   meta=cargar_meta(conn)
+   st.sidebar.success(f"Datos base guardados en la base de datos (subidos: {meta.get('actualizado','—')})")
+   reemplazar=st.sidebar.checkbox('Subir/reemplazar datos base')
+  else:
+   st.sidebar.info('Primera vez: sube histórico y parámetros de costo/lead time. Quedarán guardados en la base de datos — no hace falta volver a subirlos.')
+   reemplazar=True
+  if reemplazar:
+   uh=st.sidebar.file_uploader('Histórico semanal (.xlsx)',type='xlsx',key='uh')
+   up=st.sidebar.file_uploader('Parámetros de costo/lead time (.xlsx)',type='xlsx',key='up')
+   if uh and up:
+    try:
+     hist_df=std_history(sheets(uh));par_df=std_params(sheets(up))
+     if hist_df is not None and len(hist_df) and par_df is not None and len(par_df):
+      guardar_historico(conn,hist_df);guardar_parametros(conn,par_df);guardar_meta(conn)
+      base_lista=True
+      st.sidebar.success('Datos base guardados en la base de datos. Para las próximas visitas solo hace falta actualizar el inventario.')
+     else:st.sidebar.warning('No se reconocieron las columnas esperadas en alguno de los dos archivos.')
+    except Exception as e:st.sidebar.error(str(e))
+  if base_lista:
    try:
-    guardar_base(uh,up); base_lista=True
-    st.sidebar.success('Datos base guardados. Para las próximas visitas solo hace falta actualizar el inventario.')
+    hist=leer_historico(conn)
+    params=leer_parametros(conn)
+    if hist is not None and len(hist):
+     fc=generar_pronostico_ml(hist,METRICAS)
+     if fc is not None and len(fc):
+      forecast=fc
+      st.sidebar.success(f'Pronóstico generado con Machine Learning ({hist.Fecha.nunique()} semanas de histórico usadas).')
    except Exception as e:st.sidebar.error(str(e))
- st.sidebar.caption('Nota: los datos base se guardan temporalmente en el servidor de esta app. Si la app se reinicia por inactividad prolongada, puede que debas volver a subirlos una vez.')
- if base_lista:
-  try:
-   hist=std_history(sheets(os.path.join(DATA_DIR,'historico.xlsx')))
-   params=std_params(sheets(os.path.join(DATA_DIR,'parametros.xlsx')))
-   if hist is not None and len(hist):
-    fc=generar_pronostico_ml(hist,METRICAS)
-    if fc is not None and len(fc):
-     forecast=fc
-     st.sidebar.success(f'Pronóstico generado con Machine Learning ({hist.Fecha.nunique()} semanas de histórico usadas).')
-  except Exception as e:st.sidebar.error(str(e))
- st.sidebar.subheader('2) Actualizar inventario (cada vez)')
- uinv=st.sidebar.file_uploader('Inventario actual: Código + cantidad en stock (.xlsx)',type='xlsx',key='uinv')
- if uinv:
-  try:
-   inv_nuevo=std_inventario(sheets(uinv))
-   if inv_nuevo is not None and len(inv_nuevo):
-    params=merge_inventario(params,inv_nuevo)
-    st.sidebar.success(f'Inventario actualizado para {len(inv_nuevo)} SKU.')
-   else:st.sidebar.warning('No se reconocieron columnas de Código/Inventario en el archivo.')
-  except Exception as e:st.sidebar.error(str(e))
+  st.sidebar.subheader('2) Actualizar inventario (cada vez)')
+  uinv=st.sidebar.file_uploader('Inventario actual: Código + cantidad en stock (.xlsx)',type='xlsx',key='uinv')
+  if uinv:
+   try:
+    inv_nuevo=std_inventario(sheets(uinv))
+    if inv_nuevo is not None and len(inv_nuevo):
+     params=merge_inventario(params,inv_nuevo)
+     guardar_parametros(conn,params)
+     st.sidebar.success(f'Inventario actualizado para {len(inv_nuevo)} SKU y guardado en la base de datos.')
+    else:st.sidebar.warning('No se reconocieron columnas de Código/Inventario en el archivo.')
+   except Exception as e:st.sidebar.error(str(e))
 Sdefault=st.sidebar.number_input('Costo por orden S ($)',.01,value=15.0)
 LTdefault=st.sidebar.number_input('Lead time por defecto (días)',1,value=30)
 

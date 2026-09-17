@@ -8,6 +8,7 @@ node_modules/
 .claude/
 page_dump.html
 data_base/
+.streamlit/secrets.toml
 test_*.py
 test_*.xlsx
 test_*.png
