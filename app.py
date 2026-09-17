@@ -20,6 +20,8 @@ PRODUCTOS={
 'BR 001029':'ID CARD NEWBORD BIO RAD','BR 001235':'ID CARD DIACLON ABODVI-A1B BIO RAD','BR 001255':'ID CARD ABD/ABD BIORAD','BR 002124':'ID CARD RH-SUBGROUP+ K 4x12 BIO-RAD','BR 002125':'ID CARD RH-SUBGROUP+K BIO RAD','BR 004014':'ID CARD LISS/COOMBS KIT 4 x 12 BIO RAD','BR 004015':'ID CARD LISS/COOMBS BIO RAD','BR 004015-1':'TARJETA PARA PRUEBA CRUZADA / COMPATIBILIDAD','BR 004310':'ID DIACELL I II III 3X10ML BIO RAD','BR 004851':'ID DC SCREENING I BIO RAD','BR 009280':'ID DILUENT 2 500ML BIO RAD','DM BT248DOPE':'EQUIPO DE TRASFUSION DE SANGRE DEMOTECK'}
 METRICAS=pd.DataFrame([
 ['BR 001029','Promedio histórico',815.19,1072.84,72.59,.675],['BR 001235','Croston',3014.80,4187.64,54.50,.74037],['BR 001255','Ingenuo',1411.12,2096.19,79.33,.553],['BR 002124','XGBoost',8.83,12.60,31.43,.902],['BR 002125','Ingenuo',1766.73,2606.30,133.93,.915],['BR 004014','XGBoost',4.38,5.65,23.22,.613],['BR 004015','Ingenuo',3850.04,5463.68,100.15,.962],['BR 004015-1','Ingenuo',6161.08,8429.30,103.53,.755],['BR 004310','Holt-Winters',16.33,21.63,75.39,.737],['BR 004851','XGBoost',240.20,326.00,120.44,.932],['BR 009280','Random Forest',16.46,18.04,74.28,.723],['DM BT248DOPE','Promedio histórico',2325.50,2923.39,113.57,.997]],columns=['Codigo','Modelo','MAE','RMSE','sMAPE','MASE'])
+# EOQ dinamico congelado (Tabla 32 del documento final de tesis - cantidad sugerida, ajustada al MOQ)
+EOQ_CONGELADO={'BR 001029':1161,'BR 001235':3094,'BR 001255':190,'BR 002124':19,'BR 002125':1050,'BR 004014':19,'BR 004015':1691,'BR 004015-1':1667,'BR 004310':38,'BR 004851':241,'BR 009280':32,'DM BT248DOPE':2798}
 BASE=pd.DataFrame([
 ['BR 001029',4968.02,4439.08,9407.10,2008],['BR 001235',29746.90,17155.21,46902.10,6848],['BR 001255',128.57,7065.68,7194.26,30],['BR 002124',94.26,50.81,145.07,15],['BR 002125',7187.14,6675.98,13863.13,9610],['BR 004014',93.96,26.78,120.73,20],['BR 004015',16315.71,16553.23,32868.94,3807],['BR 004015-1',2927.14,29110.30,32037.44,683],['BR 004310',91.92,88.13,180.05,63],['BR 004851',827.71,1108.42,1936.13,29],['BR 009280',130.15,71.57,201.73,52],['DM BT248DOPE',8894.29,9859.32,18753.60,220]],columns=['Codigo','Demanda_LT','SS','ROP','Inventario_Fisico'])
 SERV={'BR 001029':(.975,'Media'),'BR 001235':(.975,'Media'),'BR 001255':(.95,'Alta'),'BR 002124':(.99,'Baja'),'BR 002125':(.95,'Alta'),'BR 004014':(.99,'Baja'),'BR 004015':(.975,'Media'),'BR 004015-1':(.95,'Alta'),'BR 004310':(.975,'Media'),'BR 004851':(.95,'Alta'),'BR 009280':(.975,'Media'),'DM BT248DOPE':(.95,'Alta')}
@@ -188,7 +190,7 @@ LTdefault=st.sidebar.number_input('Lead time por defecto (días)',1,value=30)
 
 master=BASE.merge(METRICAS,on='Codigo',how='left');master['Producto']=master.Codigo.map(PRODUCTOS)
 master['Nivel_Servicio']=master.Codigo.map(lambda c:SERV[c][0]);master['Variabilidad']=master.Codigo.map(lambda c:SERV[c][1]);master['Z']=master.Nivel_Servicio.map(lambda x:norm.ppf(x));master['Lead_Time_Dias']=30.;master['Lead_Time_Semanas']=master.Lead_Time_Dias/7
-master['Sigma_e']=master.SS/(master.Z*np.sqrt(master.Lead_Time_Semanas));master['Posicion_Inventario']=master.Inventario_Fisico;master['Fuente_IP']='Inventario físico (alerta preliminar)';master['EOQ']=np.nan;master.loc[master.Codigo.eq('BR 004015-1'),'EOQ']=1667
+master['Sigma_e']=master.SS/(master.Z*np.sqrt(master.Lead_Time_Semanas));master['Posicion_Inventario']=master.Inventario_Fisico;master['Fuente_IP']='Inventario físico (alerta preliminar)';master['EOQ']=master.Codigo.map(EOQ_CONGELADO)
 if params is not None and len(params):
  p=params.drop_duplicates('Codigo',keep='last');master=master.merge(p,on='Codigo',how='left',suffixes=('','_new'))
  for c in ['Inventario_Fisico','Lead_Time_Dias']:
@@ -252,6 +254,8 @@ with tabs[1]:
   'Codigo':'SKU','Clasificacion_ABC':'Clase ABC','Clasificacion_FSN':'Rotación','Pronostico_Medio':'Demanda predicha (semanal)',
   'Demanda_Anualizada':'Demanda predicha (anual)','EOQ':'Cantidad óptima a pedir','ROP':'Punto de reorden','Posicion_Inventario':'Stock actual',
   'Riesgo_Quiebre':'Riesgo de quiebre','Riesgo_Sobrestock':'Riesgo de sobrestock','Fecha_Sugerida_Pedido':'Fecha sugerida de pedido'})
+ for c in ['Demanda predicha (semanal)','Demanda predicha (anual)','Cantidad óptima a pedir','Punto de reorden','Stock actual']:
+  tabla[c]=tabla[c].apply(lambda v:'N/D' if pd.isna(v) else f'{v:,.0f}')
  st.dataframe(tabla,use_container_width=True,hide_index=True)
  st.markdown('**Productos de baja rotación (Slow / Non-moving):**')
  bajos=master.loc[master.Baja_Rotacion,['Codigo','Producto','Clasificacion_FSN']]
