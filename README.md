@@ -10,6 +10,15 @@
 ## Ejecución y verificación
 Primero usar **Resultados congelados de la tesis** y comprobar que aparecen los 12 SKU. Contrastar obligatoriamente BR 004015-1, BR 001235 y BR 002124/BR 004014. Después usar **Cargar archivos actualizados** con histórico, pronósticos y parámetros/inventario.
 
+## Flujo de carga de datos (modo "Cargar archivos actualizados")
+1. **Datos base (una sola vez)**: histórico semanal, pronósticos y parámetros de costo/lead time. Se guardan en el servidor (`data_base/`) para no tener que volver a subirlos.
+2. **Actualizar inventario (cada vez)**: solo un archivo liviano con Código + cantidad en stock (opcionalmente pedidos en tránsito/pendientes). El sistema recalcula todo usando los datos base ya guardados.
+
+Nota: en hosting gratuito (Streamlit Community Cloud) los datos base guardados pueden perderse si la app se reinicia por inactividad prolongada; en ese caso hay que volver a subirlos una vez.
+
+## Panel de Decisión (pestaña nueva)
+Muestra por SKU: clasificación ABC/FSN (fuente: análisis histórico de la tesis, Fase 1), demanda predicha (semanal/anual), cantidad óptima a pedir (EOQ), punto de reorden (ROP), stock actual, riesgo de sobrestock, riesgo de quiebre, proveedor recomendado y fecha sugerida de pedido. Los indicadores de riesgo y la fecha sugerida son reglas adicionales de apoyo a la decisión — no forman parte de ni modifican las fórmulas congeladas de la metodología. "Proveedor recomendado" muestra "No disponible" hasta contar con un archivo que mapee producto→proveedor.
+
 ## Fórmulas congeladas
 - D = promedio del pronóstico de 12 semanas × 52.
 - e_t = y_t - yhat_t.
