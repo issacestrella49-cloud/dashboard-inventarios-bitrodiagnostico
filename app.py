@@ -6,6 +6,9 @@ import plotly.express as px
 import plotly.graph_objects as go
 import streamlit as st
 from scipy.stats import norm
+from statsmodels.tsa.holtwinters import ExponentialSmoothing
+from sklearn.ensemble import RandomForestRegressor
+from xgboost import XGBRegressor
 
 st.set_page_config(page_title='Inventario Inteligente | Bitrodiagnóstico',page_icon='📦',layout='wide')
 
@@ -65,15 +68,6 @@ def best(sh,groups):
   sc=sum(col(d,g) is not None for g in groups)
   if sc>bs:ans=d.copy();bs=sc
  return ans,bs
-def std_forecast(sh):
- if not sh:return None
- d,s=best(sh,[['codigo','producto'],['fecha'],['pronostico','demanda semanal pronosticada','demanda pronosticada']])
- if s<2:return None
- cc=col(d,['codigo','producto']); cp=col(d,['pronostico','demanda semanal pronosticada','demanda pronosticada','forecast']); cf=col(d,['fecha','fecha futura']); cm=col(d,['modelo'])
- if not cc or not cp:return None
- o=pd.DataFrame({'Codigo':d[cc].astype(str).str.strip().str.upper(),'Pronostico':pd.to_numeric(d[cp],errors='coerce')})
- o['Fecha']=pd.to_datetime(d[cf],errors='coerce',dayfirst=True) if cf else pd.NaT;o['Modelo']=d[cm].astype(str) if cm else ''
- return o.dropna(subset=['Pronostico'])
 def std_history(sh):
  if not sh:return None
  d,s=best(sh,[['codigo','producto'],['fecha'],['demanda','ventas']])
@@ -124,11 +118,68 @@ def xlsx_bytes(dic):
   for n,d in dic.items():d.to_excel(w,sheet_name=n[:31],index=False)
  return b.getvalue()
 
+# --- Motor de pronostico (Machine Learning): reentrena, con el historico ya subido, el MISMO
+# modelo ganador que la tesis valido por SKU en la Fase 2 (ver METRICAS). No se re-elige el
+# modelo ganador (eso no se modifica); solo se automatiza su ejecucion sobre datos vigentes. ---
+def naive_forecast(vals,horizon=12):
+ vals=np.asarray(vals,float);last=vals[-1] if len(vals) else 0.
+ return np.full(horizon,max(last,0.))
+def promedio_forecast(vals,horizon=12):
+ vals=np.asarray(vals,float);m=vals.mean() if len(vals) else 0.
+ return np.full(horizon,max(m,0.))
+def croston_forecast(vals,horizon=12,alpha=0.1):
+ vals=np.asarray(vals,float);nz=np.where(vals>0)[0]
+ if not len(nz):return np.zeros(horizon)
+ demand=vals[nz];intervals=np.diff(nz,prepend=-1)
+ z=float(demand[0]);p=float(intervals[0])
+ for i in range(1,len(demand)):
+  z=alpha*demand[i]+(1-alpha)*z;p=alpha*intervals[i]+(1-alpha)*p
+ rate=z/p if p>0 else 0.
+ return np.full(horizon,max(rate,0.))
+def holtwinters_forecast(vals,horizon=12):
+ vals=np.asarray(vals,float)
+ if len(vals)<8:return promedio_forecast(vals,horizon)
+ try:
+  m=ExponentialSmoothing(vals,trend='add',seasonal=None,initialization_method='estimated').fit()
+  return np.clip(np.asarray(m.forecast(horizon)),0,None)
+ except Exception:return promedio_forecast(vals,horizon)
+def ml_forecast(vals,horizon,modelo,n_lags=4):
+ vals=np.asarray(vals,float)
+ if len(vals)<=n_lags+8:return promedio_forecast(vals,horizon)
+ X,y=[],[]
+ for i in range(n_lags,len(vals)):X.append(vals[i-n_lags:i]);y.append(vals[i])
+ X,y=np.array(X),np.array(y)
+ try:
+  mdl=RandomForestRegressor(n_estimators=200,random_state=42) if modelo=='Random Forest' else XGBRegressor(n_estimators=200,max_depth=3,learning_rate=0.1,random_state=42)
+  mdl.fit(X,y)
+ except Exception:return promedio_forecast(vals,horizon)
+ window=list(vals[-n_lags:]);out=[]
+ for _ in range(horizon):
+  pred=max(float(mdl.predict([window])[0]),0.);out.append(pred);window=window[1:]+[pred]
+ return np.array(out)
+@st.cache_data(show_spinner='Entrenando modelos de pronóstico con el histórico cargado...')
+def generar_pronostico_ml(hist,metricas,horizon=12):
+ if hist is None or not len(hist):return None
+ fecha_inicio=hist.Fecha.max()+pd.Timedelta(days=7)
+ fechas=pd.date_range(fecha_inicio,periods=horizon,freq='7D')
+ filas=[]
+ for _,m in metricas.iterrows():
+  cod,modelo=m.Codigo,m.Modelo
+  serie=hist.loc[hist.Codigo.eq(cod)].sort_values('Fecha').Demanda.dropna().values
+  if not len(serie):continue
+  if modelo=='Ingenuo':vals=naive_forecast(serie,horizon)
+  elif modelo=='Promedio histórico':vals=promedio_forecast(serie,horizon)
+  elif modelo=='Croston':vals=croston_forecast(serie,horizon)
+  elif modelo=='Holt-Winters':vals=holtwinters_forecast(serie,horizon)
+  elif modelo in ('XGBoost','Random Forest'):vals=ml_forecast(serie,horizon,modelo)
+  else:vals=promedio_forecast(serie,horizon)
+  for f,v in zip(fechas,vals):filas.append([cod,f,modelo,float(v)])
+ return pd.DataFrame(filas,columns=['Codigo','Fecha','Modelo','Pronostico']) if filas else None
+
 def hay_base_guardada():
- return all(os.path.exists(os.path.join(DATA_DIR,n)) for n in ('historico.xlsx','pronosticos.xlsx','parametros.xlsx'))
-def guardar_base(uh,uf,up):
+ return all(os.path.exists(os.path.join(DATA_DIR,n)) for n in ('historico.xlsx','parametros.xlsx'))
+def guardar_base(uh,up):
  with open(os.path.join(DATA_DIR,'historico.xlsx'),'wb') as f:f.write(uh.getvalue())
- with open(os.path.join(DATA_DIR,'pronosticos.xlsx'),'wb') as f:f.write(uf.getvalue())
  with open(os.path.join(DATA_DIR,'parametros.xlsx'),'wb') as f:f.write(up.getvalue())
  with open(META_PATH,'w') as f:json.dump({'actualizado':datetime.now().strftime('%d/%m/%Y %H:%M')},f)
 def cargar_meta():
@@ -156,24 +207,26 @@ if modo.startswith('Cargar'):
   st.sidebar.success(f"Datos base guardados (subidos: {meta.get('actualizado','—')})")
   reemplazar=st.sidebar.checkbox('Subir/reemplazar datos base')
  else:
-  st.sidebar.info('Primera vez: sube histórico, pronósticos y parámetros de costo/lead time.')
+  st.sidebar.info('Primera vez: sube histórico y parámetros de costo/lead time. El pronóstico de las próximas semanas se genera automáticamente con Machine Learning a partir del histórico.')
   reemplazar=True
  if reemplazar:
   uh=st.sidebar.file_uploader('Histórico semanal (.xlsx)',type='xlsx',key='uh')
-  uf=st.sidebar.file_uploader('Pronósticos (.xlsx)',type='xlsx',key='uf')
   up=st.sidebar.file_uploader('Parámetros de costo/lead time (.xlsx)',type='xlsx',key='up')
-  if uh and uf and up:
+  if uh and up:
    try:
-    guardar_base(uh,uf,up); base_lista=True
+    guardar_base(uh,up); base_lista=True
     st.sidebar.success('Datos base guardados. Para las próximas visitas solo hace falta actualizar el inventario.')
    except Exception as e:st.sidebar.error(str(e))
  st.sidebar.caption('Nota: los datos base se guardan temporalmente en el servidor de esta app. Si la app se reinicia por inactividad prolongada, puede que debas volver a subirlos una vez.')
  if base_lista:
   try:
    hist=std_history(sheets(os.path.join(DATA_DIR,'historico.xlsx')))
-   ff=std_forecast(sheets(os.path.join(DATA_DIR,'pronosticos.xlsx')))
    params=std_params(sheets(os.path.join(DATA_DIR,'parametros.xlsx')))
-   if ff is not None and len(ff):forecast=ff
+   if hist is not None and len(hist):
+    fc=generar_pronostico_ml(hist,METRICAS)
+    if fc is not None and len(fc):
+     forecast=fc
+     st.sidebar.success(f'Pronóstico generado con Machine Learning ({hist.Fecha.nunique()} semanas de histórico usadas).')
   except Exception as e:st.sidebar.error(str(e))
  st.sidebar.subheader('2) Actualizar inventario (cada vez)')
  uinv=st.sidebar.file_uploader('Inventario actual: Código + cantidad en stock (.xlsx)',type='xlsx',key='uinv')
@@ -291,6 +344,8 @@ with tabs[7]:
 - $IP=OH+OO-BO$
 
 Actualización propuesta: enero, abril, julio y octubre. Incorporar datos reales, reevaluar candidatos, ratificar/sustituir ganador y recalcular pronóstico, σₑ, SS, ROP y EOQ.
+
+**Pronóstico con Machine Learning (modo "Cargar archivos actualizados"):** al subir el histórico una sola vez, el sistema reentrena automáticamente el mismo modelo ganador que la Fase 2 de la tesis validó para cada SKU (Ingenuo, Promedio histórico, Croston, Holt-Winters, XGBoost o Random Forest) y genera el pronóstico de las siguientes 12 semanas. No se vuelve a elegir el modelo ganador por SKU — esa decisión ya fue validada estadísticamente en la tesis y no se modifica — solo se automatiza su ejecución sobre el histórico vigente.
 
 **Indicadores adicionales (no congelados):** clasificación ABC/FSN (fuente: análisis histórico Fase 1), riesgo de sobrestock, riesgo de quiebre y fecha sugerida de pedido son reglas de apoyo a la decisión agregadas sobre los resultados del modelo; no alteran D, σₑ, SS, ROP, H, EOQ ni IP.
 
