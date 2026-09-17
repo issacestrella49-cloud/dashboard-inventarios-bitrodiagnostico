@@ -13,13 +13,8 @@ LOGO_PATH = 'logo_bitrodiagnostico.png'
 if os.path.exists(LOGO_PATH):
     st.sidebar.image(LOGO_PATH, use_container_width=True)
     st.sidebar.divider()
-c_logo, c_title = st.columns([1,6])
-with c_logo:
-    if os.path.exists(LOGO_PATH):
-        st.image(LOGO_PATH, width=90)
-with c_title:
-    st.title('Sistema inteligente de gestión de inventarios')
-    st.caption('Modelo híbrido basado en Machine Learning y EOQ dinámico · Bitrodiagnóstico Cía. Ltda.')
+st.title('Sistema inteligente de gestión de inventarios')
+st.caption('Modelo híbrido basado en Machine Learning y EOQ dinámico · Bitrodiagnóstico Cía. Ltda.')
 
 PRODUCTOS={
 'BR 001029':'ID CARD NEWBORD BIO RAD','BR 001235':'ID CARD DIACLON ABODVI-A1B BIO RAD','BR 001255':'ID CARD ABD/ABD BIORAD','BR 002124':'ID CARD RH-SUBGROUP+ K 4x12 BIO-RAD','BR 002125':'ID CARD RH-SUBGROUP+K BIO RAD','BR 004014':'ID CARD LISS/COOMBS KIT 4 x 12 BIO RAD','BR 004015':'ID CARD LISS/COOMBS BIO RAD','BR 004015-1':'TARJETA PARA PRUEBA CRUZADA / COMPATIBILIDAD','BR 004310':'ID DIACELL I II III 3X10ML BIO RAD','BR 004851':'ID DC SCREENING I BIO RAD','BR 009280':'ID DILUENT 2 500ML BIO RAD','DM BT248DOPE':'EQUIPO DE TRASFUSION DE SANGRE DEMOTECK'}
@@ -44,7 +39,6 @@ FSN_LABEL={'F':'Rápido (Fast)','S':'Lento (Slow)','N':'Sin movimiento (Non-movi
 DATA_DIR='data_base'
 os.makedirs(DATA_DIR, exist_ok=True)
 META_PATH=os.path.join(DATA_DIR,'meta.json')
-TEXT_FIELDS={'Proveedor_Recomendado'}
 
 def clean(x):
  x=''.join(c for c in unicodedata.normalize('NFD',str(x).lower()) if unicodedata.category(c)!='Mn')
@@ -89,7 +83,7 @@ def std_params(sh):
  if not sh:return None
  d,s=best(sh,[['codigo'],['costo unitario'],['lead time'],['inventario actual']])
  if s<2:return None
- amap={'Codigo':['codigo'],'Costo_Unitario':['costo unitario'],'Tasa_Mantenimiento':['tasa mantenimiento anual'],'H':['h anual por unidad'],'Lead_Time_Dias':['lead time proveedor','lead time'],'Inventario_Fisico':['inventario actual fisico','inventario actual'],'MOQ':['moq','cantidad minima de compra'],'Pedidos_Transito':['pedidos en transito'],'Pedidos_Pendientes':['pedidos pendientes','backorders'],'Costo_Orden':['costo orden','costo de ordenar'],'Proveedor_Recomendado':['proveedor recomendado','proveedor sugerido','proveedor']}
+ amap={'Codigo':['codigo'],'Costo_Unitario':['costo unitario'],'Tasa_Mantenimiento':['tasa mantenimiento anual'],'H':['h anual por unidad'],'Lead_Time_Dias':['lead time proveedor','lead time'],'Inventario_Fisico':['inventario actual fisico','inventario actual'],'MOQ':['moq','cantidad minima de compra'],'Pedidos_Transito':['pedidos en transito'],'Pedidos_Pendientes':['pedidos pendientes','backorders'],'Costo_Orden':['costo orden','costo de ordenar']}
  o=pd.DataFrame()
  for new,a in amap.items():
   c=col(d,a)
@@ -97,7 +91,6 @@ def std_params(sh):
  if 'Codigo' not in o:return None
  o['Codigo']=o['Codigo'].astype(str).str.strip().str.upper()
  for c in o.columns[1:]:
-  if c in TEXT_FIELDS:continue
   o[c]=pd.to_numeric(o[c],errors='coerce')
  return o
 def std_inventario(sh):
@@ -222,8 +215,6 @@ master['Demanda_Anualizada']=master['Demanda_Anualizada'].fillna(master['Pronost
 master['Clasificacion_ABC']=master.Codigo.map(lambda c:CLASIF.get(c,(None,None))[0])
 master['Clasificacion_FSN']=master.Codigo.map(lambda c:FSN_LABEL.get(CLASIF.get(c,(None,None))[1],'N/D'))
 master['Baja_Rotacion']=master.Codigo.map(lambda c:CLASIF.get(c,(None,None))[1] in ('S','N'))
-if 'Proveedor_Recomendado' not in master.columns:master['Proveedor_Recomendado']='No disponible'
-else:master['Proveedor_Recomendado']=master['Proveedor_Recomendado'].fillna('No disponible')
 
 def riesgo_sobrestock(pos,rop,eoq):
  if pd.isna(pos) or pd.isna(rop):return ''
@@ -257,16 +248,16 @@ with tabs[1]:
  cs[1].metric('Baja rotación',int(master.Baja_Rotacion.sum()))
  cs[2].metric('Riesgo de sobrestock',int((master.Riesgo_Sobrestock!='').sum()))
  cs[3].metric('Riesgo de quiebre',int((master.Riesgo_Quiebre!='').sum()))
- tabla=master[['Codigo','Producto','Clasificacion_ABC','Clasificacion_FSN','Pronostico_Medio','Demanda_Anualizada','EOQ','ROP','Posicion_Inventario','Riesgo_Quiebre','Riesgo_Sobrestock','Proveedor_Recomendado','Fecha_Sugerida_Pedido']].rename(columns={
+ tabla=master[['Codigo','Producto','Clasificacion_ABC','Clasificacion_FSN','Pronostico_Medio','Demanda_Anualizada','EOQ','ROP','Posicion_Inventario','Riesgo_Quiebre','Riesgo_Sobrestock','Fecha_Sugerida_Pedido']].rename(columns={
   'Codigo':'SKU','Clasificacion_ABC':'Clase ABC','Clasificacion_FSN':'Rotación','Pronostico_Medio':'Demanda predicha (semanal)',
   'Demanda_Anualizada':'Demanda predicha (anual)','EOQ':'Cantidad óptima a pedir','ROP':'Punto de reorden','Posicion_Inventario':'Stock actual',
-  'Riesgo_Quiebre':'Riesgo de quiebre','Riesgo_Sobrestock':'Riesgo de sobrestock','Proveedor_Recomendado':'Proveedor recomendado','Fecha_Sugerida_Pedido':'Fecha sugerida de pedido'})
+  'Riesgo_Quiebre':'Riesgo de quiebre','Riesgo_Sobrestock':'Riesgo de sobrestock','Fecha_Sugerida_Pedido':'Fecha sugerida de pedido'})
  st.dataframe(tabla,use_container_width=True,hide_index=True)
  st.markdown('**Productos de baja rotación (Slow / Non-moving):**')
  bajos=master.loc[master.Baja_Rotacion,['Codigo','Producto','Clasificacion_FSN']]
  if len(bajos):st.dataframe(bajos,use_container_width=True,hide_index=True)
  else:st.caption('Ninguno en esta selección.')
- st.caption('Clasificación ABC/FSN tomada del análisis histórico de la tesis (Fase 1). "Riesgo de sobrestock", "riesgo de quiebre" y "fecha sugerida de pedido" son indicadores adicionales de apoyo a la decisión — no reemplazan ni modifican las fórmulas congeladas de la metodología (D, σₑ, SS, ROP, H, EOQ, IP). "Proveedor recomendado" requiere un archivo con el mapeo producto→proveedor que aún no está disponible; mientras tanto se muestra "No disponible".')
+ st.caption('Clasificación ABC/FSN tomada del análisis histórico de la tesis (Fase 1). "Riesgo de sobrestock", "riesgo de quiebre" y "fecha sugerida de pedido" son indicadores adicionales de apoyo a la decisión — no reemplazan ni modifican las fórmulas congeladas de la metodología (D, σₑ, SS, ROP, H, EOQ, IP).')
 with tabs[2]:
  sh=master[['Codigo','Producto','Modelo','MASE','sMAPE','Variabilidad','Nivel_Servicio','Sigma_e','SS','ROP','Inventario_Fisico','Posicion_Inventario','EOQ','Alerta','Advertencia']].copy();sh.Nivel_Servicio=(sh.Nivel_Servicio*100).round(1).astype(str)+' %';st.dataframe(sh,use_container_width=True,hide_index=True)
  f=px.bar(master.sort_values('MASE'),x='Codigo',y='MASE',color='Modelo',title='MASE por SKU');f.add_hline(y=1,line_dash='dash');st.plotly_chart(f,use_container_width=True)

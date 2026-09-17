@@ -17,7 +17,7 @@ Primero usar **Resultados congelados de la tesis** y comprobar que aparecen los 
 Nota: en hosting gratuito (Streamlit Community Cloud) los datos base guardados pueden perderse si la app se reinicia por inactividad prolongada; en ese caso hay que volver a subirlos una vez.
 
 ## Panel de Decisión (pestaña nueva)
-Muestra por SKU: clasificación ABC/FSN (fuente: análisis histórico de la tesis, Fase 1), demanda predicha (semanal/anual), cantidad óptima a pedir (EOQ), punto de reorden (ROP), stock actual, riesgo de sobrestock, riesgo de quiebre, proveedor recomendado y fecha sugerida de pedido. Los indicadores de riesgo y la fecha sugerida son reglas adicionales de apoyo a la decisión — no forman parte de ni modifican las fórmulas congeladas de la metodología. "Proveedor recomendado" muestra "No disponible" hasta contar con un archivo que mapee producto→proveedor.
+Muestra por SKU: clasificación ABC/FSN (fuente: análisis histórico de la tesis, Fase 1), demanda predicha (semanal/anual), cantidad óptima a pedir (EOQ), punto de reorden (ROP), stock actual, riesgo de sobrestock, riesgo de quiebre y fecha sugerida de pedido. Los indicadores de riesgo y la fecha sugerida son reglas adicionales de apoyo a la decisión — no forman parte de ni modifican las fórmulas congeladas de la metodología.
 
 ## Fórmulas congeladas
 - D = promedio del pronóstico de 12 semanas × 52.
